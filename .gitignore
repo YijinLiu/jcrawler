@@ -1,0 +1,6 @@
+books/
+target/
+*.class
+*.jar
+*.swp
+*.swo
