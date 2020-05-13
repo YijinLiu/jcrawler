@@ -25,6 +25,7 @@ public class SpringerHandler implements Handler {
         return "springer";
     }
 
+    @Override
     public boolean Handle(String url, Document doc, Crawler crawler) {
         if (url == ML_65_URL) {
             doc.getElementsByTag("a").forEach((el) -> {
@@ -44,7 +45,10 @@ public class SpringerHandler implements Handler {
                     logger.atWarning().log("Too many failures on '%s', won't retry.", url);
                 }
             } else {
-                crawler.download(pdfEls.first().absUrl("href"), titleEl.text() + ".pdf", MAX_TRIES);
+                crawler.download(
+                    pdfEls.first().absUrl("href"),
+                    Crawler.sanitizeFilename(
+                        titleEl.text()) + ".pdf", "", "", TIMEOUT_MILLIS, MAX_TRIES);
             }
             return true;
         }
@@ -53,19 +57,34 @@ public class SpringerHandler implements Handler {
 
     // java -jar springer/target/springer-0.0.1-shaded.jar -d books/springer
     public static void main(String[] args) throws ParseException {
+        System.setProperty(
+                "java.util.logging.SimpleFormatter.format",
+                "%1$tY-%1$tm-%1$td %1$tH:%1$tM:%1$tS %4$s %5$s%6$s%n");
+        AnsiColorConsoleHandler.replaceDefault();
+
         Options options = new Options();
-        options.addOption(Option.builder("n").longOpt("num-threads")
-                                             .hasArg()
-                                             .argName("N")
-                                             .desc("number of threads to use")
-                                             .build());
         options.addOption(Option.builder("d").longOpt("download-root")
                                              .hasArg()
                                              .required()
                                              .argName("DIR")
                                              .desc("number of threads to use")
                                              .build());
+        options.addOption(Option.builder("l").longOpt("log-level")
+                                             .hasArg()
+                                             .argName("LEVEL")
+                                             .desc("log level")
+                                             .build());
+        options.addOption(Option.builder("n").longOpt("num-threads")
+                                             .hasArg()
+                                             .argName("N")
+                                             .desc("number of threads to use")
+                                             .build());
         CommandLine cmd = new DefaultParser().parse(options, args);
+
+        if (cmd.hasOption("log-level")) {
+            System.setProperty(
+                "java.util.logging.ConsoleHandler.level", cmd.getOptionValue("log-level"));
+        }
 
         int numThreads = 3;
         if (cmd.hasOption("num-threads")) {

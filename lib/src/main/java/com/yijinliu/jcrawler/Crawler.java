@@ -1,6 +1,9 @@
 package com.yijinliu.jcrawler;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.file.Files;
@@ -23,6 +26,10 @@ import org.jsoup.nodes.Document;
 
 public class Crawler {
 
+    public static String sanitizeFilename(String filename) {
+        return filename.replace('/', '_').replace(':', '_');
+    }
+
     public Crawler(int numThreads, String downloadRoot) {
         this.executor = Executors.newFixedThreadPool(numThreads);
         this.downloadRoot = downloadRoot;
@@ -42,37 +49,45 @@ public class Crawler {
     }
 
     public boolean crawl(String url, int timeoutMillis, int maxTries) {
+        url = sanitizeUrl(url);
         if (!tryIncVal(url, 0, urlToCrawls)) return false;
         enqueueCrawl(url, timeoutMillis, maxTries);
         return true;
     }
 
     public boolean retryCrawl(String url, int timeoutMillis, int maxTries) {
+        url = sanitizeUrl(url);
         if (!tryIncVal(url, maxTries, urlToCrawls)) return false;
         enqueueCrawl(url, timeoutMillis, maxTries);
         return true;
     }
     
-    public boolean download(String url, String filename, int maxTries) {
+    public boolean download(String url, String filename, String referer, String cookies,
+                            int timeoutMillis, int maxTries) {
+        url = sanitizeUrl(url);
         if (!tryIncVal(url, 0, urlToDownloads)) return false;
-        enqueueDownload(url, filename, maxTries);
+        enqueueDownload(url, filename, referer, cookies, timeoutMillis, maxTries);
         return true;
     }
     
-    public boolean retryDownload(String url, String filename, int maxTries) {
+    public boolean retryDownload(String url, String filename, String referer, String cookies,
+                                 int timeoutMillis, int maxTries) {
+        url = sanitizeUrl(url);
         if (!tryIncVal(url, maxTries, urlToDownloads)) return false;
-        enqueueDownload(url, filename, maxTries);
+        enqueueDownload(url, filename, referer, cookies, timeoutMillis, maxTries);
         return true;
     }
 
     public void shutdown() {
         logger.atWarning().log("Waiting for all jobs to complete ...");
         phaser.arriveAndAwaitAdvance();
+        logger.atInfo().log("Successfully crawled %d URLs.", crawledUrls());
         if (!failedCrawls.isEmpty()) {
             logger.atWarning().log("Failed to crawl %d URLs:", failedCrawls.size());
             Iterator<String> it = failedCrawls.iterator();
             while (it.hasNext()) logger.atWarning().log("\t" + it.next());
         }
+        logger.atInfo().log("Successfully downloaded %d files.", downloadedFiles());
         if (!failedDownloads.isEmpty()) {
             logger.atWarning().log("Failed to download %d files:", failedDownloads.size());
             Iterator<String> it = failedDownloads.iterator();
@@ -102,16 +117,52 @@ public class Crawler {
         }
     }
 
-    private void downloadUrl(String url, String filename, int maxTries) {
-        logger.atInfo().log("Downloading '%s'...", url);
+    private void downloadUrl(String url, String filename, String referer, String cookies,
+                             int timeoutMillis, int maxTries) {
         Path path = Paths.get(downloadRoot, filename);
         try {
-            Files.copy(new URL(url).openStream(), path, StandardCopyOption.REPLACE_EXISTING);
+            path.getParent().toFile().mkdirs();
+
+            while (true) {
+                logger.atInfo().log("Downloading '%s'...", url);
+                URL urlObj = new URL(url);
+                HttpURLConnection conn = (HttpURLConnection)urlObj.openConnection();
+                conn.setReadTimeout(timeoutMillis);
+                conn.addRequestProperty("Host", urlObj.getHost());
+                conn.addRequestProperty("User-Agent", "Wget/1.19.4 (linux-gnu)");
+                conn.addRequestProperty("Accept", "*/*");
+                conn.addRequestProperty("Accept-Encoding", "identity");
+                if (!referer.isEmpty()) conn.addRequestProperty("Referer", referer);
+                if (!cookies.isEmpty()) conn.addRequestProperty("Cookie", cookies);
+                switch (conn.getResponseCode()) {
+                    case HttpURLConnection.HTTP_OK:
+                        Files.copy(conn.getInputStream(), path, StandardCopyOption.REPLACE_EXISTING);
+                        return;
+                    case HttpURLConnection.HTTP_MOVED_TEMP:
+                    case HttpURLConnection.HTTP_MOVED_PERM:
+                    case HttpURLConnection.HTTP_SEE_OTHER:
+                        referer = url;
+                        url = sanitizeUrl(conn.getHeaderField("Location"));
+                        String newCookies = conn.getHeaderField("Set-Cookie");
+                        if (!newCookies.isEmpty()) cookies = newCookies;
+                        break;
+                    case HttpURLConnection.HTTP_NOT_FOUND:
+                        logger.atWarning().log("Not found '%s'.", url);
+                        failedDownloads.add(url);
+                        return;
+                    case HttpURLConnection.HTTP_BAD_REQUEST:
+                        logger.atWarning().log("Bad request '%s': %s", url, conn.getResponseMessage());
+                        failedDownloads.add(url);
+                        return;
+                    default:
+                        throw new IOException(conn.getResponseMessage());
+                }
+            }
         } catch (MalformedURLException e) {
             logger.atWarning().withCause(e).log("Invalid download URL '%s'.", url);
         } catch (IOException e) {
             logger.atWarning().withCause(e).log("Failed to download '%s'.", url);
-            if (!retryDownload(url, filename, maxTries)) {
+            if (!retryDownload(url, filename, referer, cookies, timeoutMillis, maxTries)) {
                 logger.atWarning().log("Max tries reached for '%s'.", url);
                 failedDownloads.add(url);
             }
@@ -127,10 +178,11 @@ public class Crawler {
         logger.atInfo().log("Queued URL '%s'.", url);
     }
     
-    public void enqueueDownload(String url, String filename, int maxTries) {
+    public void enqueueDownload(String url, String filename, String referer, String cookies,
+                                int timeoutMillis, int maxTries) {
         phaser.register();
         executor.execute(() -> {
-            downloadUrl(url, filename, maxTries);
+            downloadUrl(url, filename, referer, cookies, timeoutMillis, maxTries);
             phaser.arrive();
         });
         logger.atInfo().log("Queued URL '%s'(%s).", url, filename);
@@ -148,6 +200,37 @@ public class Crawler {
         }
         lock.unlock();
         return true;
+    }
+
+    private int crawledUrls() {
+        int crawls = 0;
+        lock.lock();
+        crawls = urlToCrawls.size();
+        lock.unlock();
+        return crawls - failedCrawls.size();
+    }
+
+    private int downloadedFiles() {
+        int downloads = 0;
+        lock.lock();
+        downloads = urlToDownloads.size();
+        lock.unlock();
+        return downloads - failedDownloads.size();
+    }
+
+    private static String responseBody(HttpURLConnection conn) throws IOException {
+        StringBuilder builder = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(conn.getInputStream(), "UTF-8"))) {
+            int ch = 0;
+            while ((ch = reader.read()) != -1) builder.append((char)ch);
+        }
+        return builder.toString();
+    }
+
+    private static String sanitizeUrl(String url) {
+        // TODO: Find a decent way to do this.
+        return url.replaceAll(" ", "%20");
     }
     
     private ExecutorService executor;
