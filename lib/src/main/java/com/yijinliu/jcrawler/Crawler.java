@@ -87,7 +87,7 @@ public class Crawler {
             Document doc = Jsoup.parse(new URL(url), timeoutMillis);
             for (Handler handler : handlers) {
                 if (handler.Handle(url, doc, this)) {
-                    logger.atInfo().log("[%s] Handled '%s'.", url);
+                    logger.atFine().log("[%s] Handled '%s'.", handler.name(), url);
                     return;
                 }
             }

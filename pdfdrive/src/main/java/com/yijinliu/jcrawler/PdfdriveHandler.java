@@ -1,5 +1,8 @@
 package com.yijinliu.jcrawler;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import com.google.common.flogger.FluentLogger;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.DefaultParser;
@@ -10,12 +13,18 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
-public class SpringerHandler implements Handler {
+public class PdfdriveHandler implements Handler {
 
-    public final static String ML_65_URL =
-        "https://towardsdatascience.com/springer-has-released-65-machine-learning-and-data-books-for-free-961f8181f189";
+    public final static String CATEGORY_URL_PREFIX = "https://www.pdfdrive.com/category/";
 
-    public final static String BOOK_URL_PREFIX = "http://link.springer.com/openurl?";
+    public final static String MATH_URL = CATEGORY_URL_PREFIX + "67";
+
+    public final static String PROGRAMMING_URL = CATEGORY_URL_PREFIX + "63";
+
+    public final static Pattern bookUrlPattern = Pattern.compile(".+-e[0-9]+[.]html");
+
+    public final static Pattern onClickPattern = Pattern.compile(
+        "initConverter[(]'([0-9]+)','([0-9a-f]+)','EPUB'[)];.*");
 
     public final static int TIMEOUT_MILLIS = 5000;
 
@@ -26,32 +35,48 @@ public class SpringerHandler implements Handler {
     }
 
     public boolean Handle(String url, Document doc, Crawler crawler) {
-        if (url == ML_65_URL) {
-            doc.getElementsByTag("a").forEach((el) -> {
-                String bookUrl = el.attr("href");
-                if (bookUrl.startsWith(BOOK_URL_PREFIX)) {
+        if (url.startsWith(CATEGORY_URL_PREFIX)) {
+            doc.select(".files-new a").forEach((el) -> {
+                String bookUrl = el.absUrl("href");
+                if (bookUrlPattern.matcher(bookUrl).matches()) {
                     crawler.crawl(bookUrl, TIMEOUT_MILLIS, MAX_TRIES);
+                } else {
+                    logger.atWarning().log("Unknown URL '%s'.", bookUrl);
                 }
             });
             return true;
-        } else if (url.startsWith(BOOK_URL_PREFIX)) {
-            Element titleEl = doc.selectFirst(".page-title > h1");
-            Elements pdfEls = doc.getElementsByAttributeValue(
-                "title", "Download this book in PDF format");
-            if (titleEl == null || pdfEls.isEmpty()) {
-                logger.atWarning().log("Failed to find title/pdf element for '%s'.", url);
+        } else if (bookUrlPattern.matcher(url).matches()) {
+            Element titleEl = doc.selectFirst(".ebook-main h1");
+            if (titleEl == null) {
+                logger.atWarning().log("Failed to find title element for '%s'.", url);
                 if (!crawler.retryCrawl(url, TIMEOUT_MILLIS, MAX_TRIES)) {
                     logger.atWarning().log("Too many failures on '%s', won't retry.", url);
                 }
+                return true;
+            }
+            Elements els = doc.select("a.dropdown-item");
+            String pdfUrl = null;
+            for (int i = 0; i < els.size(); i++) {
+                String onClick = els.get(i).attr("onclick");
+                Matcher matcher = onClickPattern.matcher(onClick);
+                if (matcher.matches()) {
+                    pdfUrl = String.format(
+                        "https://www.pdfdrive.com/download.pdf?id=%s&h=%s&u=cache&ext=pdf",
+                        matcher.group(1), matcher.group(2));
+                    break;
+                }
+            }
+            if (pdfUrl == null) {
+                logger.atWarning().log("Cannot find PDF download link for '%s'", url);
             } else {
-                crawler.download(pdfEls.first().absUrl("href"), titleEl.text() + ".pdf", MAX_TRIES);
+                crawler.download(pdfUrl, titleEl.text() + ".pdf", MAX_TRIES);
             }
             return true;
         }
         return false;
     }
 
-    // java -jar springer/target/springer-0.0.1-shaded.jar -d books/springer
+    // java -jar springer/target/pdfdrive-0.0.1-shaded.jar -d books/pdfdrive
     public static void main(String[] args) throws ParseException {
         Options options = new Options();
         options.addOption(Option.builder("n").longOpt("num-threads")
@@ -74,8 +99,9 @@ public class SpringerHandler implements Handler {
         String downloadRoot = cmd.getOptionValue("download-root");
 
         Crawler crawler = new Crawler(numThreads, downloadRoot);
-        crawler.addHandler(new SpringerHandler());
-        crawler.crawl(ML_65_URL, TIMEOUT_MILLIS, MAX_TRIES);
+        crawler.addHandler(new PdfdriveHandler());
+        crawler.crawl(MATH_URL, TIMEOUT_MILLIS, MAX_TRIES);
+        crawler.crawl(PROGRAMMING_URL, TIMEOUT_MILLIS, MAX_TRIES);
         crawler.shutdown();
     }
 
