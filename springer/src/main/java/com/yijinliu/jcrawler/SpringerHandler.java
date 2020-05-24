@@ -69,7 +69,12 @@ public class SpringerHandler implements Handler {
                                              .argName("DIR")
                                              .desc("number of threads to use")
                                              .build());
-        options.addOption(Option.builder("l").longOpt("log-level")
+        options.addOption(Option.builder("lf").longOpt("log-file")
+                                              .hasArg()
+                                              .argName("LOGFILE")
+                                              .desc("downloaded log file")
+                                              .build());
+        options.addOption(Option.builder("ll").longOpt("log-level")
                                              .hasArg()
                                              .argName("LEVEL")
                                              .desc("log level")
@@ -92,7 +97,7 @@ public class SpringerHandler implements Handler {
         }
         String downloadRoot = cmd.getOptionValue("download-root");
 
-        Crawler crawler = new Crawler(numThreads, downloadRoot);
+        Crawler crawler = new Crawler(numThreads, downloadRoot, cmd.getOptionValue("log-file"));
         crawler.addHandler(new SpringerHandler());
         crawler.crawl(ML_65_URL, TIMEOUT_MILLIS, MAX_TRIES);
         crawler.shutdown();

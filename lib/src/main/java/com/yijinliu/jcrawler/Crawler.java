@@ -1,8 +1,10 @@
 package com.yijinliu.jcrawler;
 
 import java.io.BufferedReader;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.PrintWriter;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -30,17 +32,24 @@ public class Crawler {
         return filename.replace('/', '_').replace(':', '_');
     }
 
-    public Crawler(int numThreads, String downloadRoot) {
+    public Crawler(int numThreads, String downloadRoot, String logFile) {
         this.executor = Executors.newFixedThreadPool(numThreads);
         this.downloadRoot = downloadRoot;
         this.handlers = new ArrayList<Handler>();
         this.phaser = new Phaser();
         this.phaser.register();
         this.lock = new ReentrantLock();
-        this.urlToCrawls = new HashMap();
-        this.urlToDownloads = new HashMap();
-        this.failedCrawls = new ConcurrentLinkedDeque();
-        this.failedDownloads = new ConcurrentLinkedDeque();
+        this.urlToCrawls = new HashMap<>();
+        this.urlToDownloads = new HashMap<>();
+        this.failedCrawls = new ConcurrentLinkedDeque<>();
+        this.failedDownloads = new ConcurrentLinkedDeque<>();
+        if (!logFile.isEmpty()) {
+            try {
+                this.logWriter = new PrintWriter(new FileWriter(logFile, true), true);
+            } catch (IOException e) {
+                logger.atWarning().withCause(e).log("Failed to open log file '%s'.", logFile);
+            }
+        }
     }
 
     public void addHandler(Handler handler) {
@@ -94,6 +103,9 @@ public class Crawler {
             while (it.hasNext()) logger.atWarning().log("\t" + it.next());
         }
         executor.shutdown();
+        if (this.logWriter != null) {
+            this.logWriter.close();
+        }
     }
 
     private void crawlUrl(String url, int timeoutMillis, int maxTries) {
@@ -136,7 +148,9 @@ public class Crawler {
                 if (!cookies.isEmpty()) conn.addRequestProperty("Cookie", cookies);
                 switch (conn.getResponseCode()) {
                     case HttpURLConnection.HTTP_OK:
-                        Files.copy(conn.getInputStream(), path, StandardCopyOption.REPLACE_EXISTING);
+                        Files.copy(
+                            conn.getInputStream(), path, StandardCopyOption.REPLACE_EXISTING);
+                        if (logWriter != null) logDownloadedFile(url, filename);
                         return;
                     case HttpURLConnection.HTTP_MOVED_TEMP:
                     case HttpURLConnection.HTTP_MOVED_PERM:
@@ -218,6 +232,10 @@ public class Crawler {
         return downloads - failedDownloads.size();
     }
 
+    private synchronized void logDownloadedFile(String url, String file) {
+        logWriter.println(DownloadedFile.builder().setUrl(url).setFile(file).build().toJson());
+    }
+
     private static String responseBody(HttpURLConnection conn) throws IOException {
         StringBuilder builder = new StringBuilder();
         try (BufferedReader reader = new BufferedReader(
@@ -242,6 +260,8 @@ public class Crawler {
     private HashMap<String, Integer> urlToDownloads;
     private ConcurrentLinkedDeque<String> failedCrawls;
     private ConcurrentLinkedDeque<String> failedDownloads;
+    private ArrayList<DownloadedFile> downloadedFiles;
+    private PrintWriter logWriter;
 
     private static final FluentLogger logger = FluentLogger.forEnclosingClass();
 }

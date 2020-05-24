@@ -14,7 +14,7 @@ public class CrawlerTest extends TestCase {
     }
 
     public void testCrawler() {
-        Crawler crawler = new Crawler(3, System.getProperty("java.io.tmpdir"));
+        Crawler crawler = new Crawler(3, System.getProperty("java.io.tmpdir"), "");
         crawler.shutdown();
     }
 }

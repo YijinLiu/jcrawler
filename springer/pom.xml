@@ -9,6 +9,11 @@
   <version>0.0.1</version>
   <name>springer</name>
 
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+  </properties>
+
   <parent>
     <groupId>com.yijinliu.jcrawler</groupId>
     <artifactId>jcrawler</artifactId>
@@ -40,14 +45,20 @@
     <plugins>
       <plugin>
         <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.8.1</version>
         <configuration>
           <source>1.8</source>
           <target>1.8</target>
+          <compilerArgs>
+            <arg>-verbose</arg>
+            <arg>-Xlint:unchecked</arg>
+          </compilerArgs>
         </configuration>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
+        <version>3.2.3</version>
         <executions>
           <execution>
             <goals>
